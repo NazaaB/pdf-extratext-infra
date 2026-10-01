@@ -1,0 +1,6 @@
+# Configuración dinámica de Traefik
+http:
+  middlewares:
+    retry-middleware:
+      retry:
+        attempts: 3

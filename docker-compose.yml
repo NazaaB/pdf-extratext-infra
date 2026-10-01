@@ -1,0 +1,97 @@
+services:
+  # ============================================
+  # API GATEWAY - Traefik
+  # ============================================
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    ports:
+      - "80:80"       # Tráfico HTTP
+      - "8080:8080"   # Dashboard de Traefik
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    networks:
+      - pdf-extratext-network
+    restart: unless-stopped
+
+  # ============================================
+  # MICROSERVICIO 1 - Extracción de texto PDF
+  # ============================================
+  ms-pdf-extract:
+    build:
+      context: ../ms-pdf-extract
+      dockerfile: Dockerfile
+    environment:
+      - APP_NAME=ms-pdf-extract
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-10}
+      - SUMMARY_SERVICE_URL=http://ms-ia-summary:8000/summarize
+    deploy:
+      replicas: 5
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    labels:
+      - "traefik.enable=true"
+      # Ruta /extract y /extract-and-summarize
+      - "traefik.http.routers.extract.rule=PathPrefix(`/extract`)"
+      - "traefik.http.routers.extract.entrypoints=web"
+      - "traefik.http.services.extract.loadbalancer.server.port=8000"
+      # Health check para balanceo inteligente
+      - "traefik.http.services.extract.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.extract.loadbalancer.healthcheck.interval=10s"
+    networks:
+      - pdf-extratext-network
+    restart: unless-stopped
+
+  # ============================================
+  # MICROSERVICIO 2 - Resumen con IA
+  # ============================================
+  ms-ia-summary:
+    build:
+      context: ../ms-ia-summary
+      dockerfile: Dockerfile
+    environment:
+      - APP_NAME=ms-ia-summary
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+    labels:
+      - "traefik.enable=true"
+      # Ruta /summarize
+      - "traefik.http.routers.summarize.rule=PathPrefix(`/summarize`)"
+      - "traefik.http.routers.summarize.entrypoints=web"
+      - "traefik.http.services.summarize.loadbalancer.server.port=8000"
+      # Health check
+      - "traefik.http.services.summarize.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.summarize.loadbalancer.healthcheck.interval=10s"
+    networks:
+      - pdf-extratext-network
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  # ============================================
+  # OLLAMA - Motor de IA
+  # ============================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - pdf-extratext-network
+    restart: unless-stopped
+
+# ============================================
+# RED Y VOLÚMENES
+# ============================================
+networks:
+  pdf-extratext-network:
+    driver: bridge
+
+volumes:
+  ollama_data:

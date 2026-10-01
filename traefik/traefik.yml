@@ -1,0 +1,20 @@
+# Configuración estática de Traefik
+api:
+  dashboard: true
+  insecure: true  # Dashboard accesible sin autenticación (solo dev)
+
+entryPoints:
+  web:
+    address: ":80"
+
+providers:
+  docker:
+    exposedByDefault: false
+    network: pdf-extratext-network
+  file:
+    filename: /etc/traefik/dynamic.yml
+
+log:
+  level: INFO
+
+accessLog: {}
