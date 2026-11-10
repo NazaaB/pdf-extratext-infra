@@ -1,95 +1,137 @@
 # pdf-extratext-infra
 
-Infraestructura del ecosistema **pdf-extratext**. Docker Compose maestro con **Traefik** como API Gateway y balanceador de carga.
+Infraestructura del ecosistema **pdf-extratext**: orquesta todos los microservicios con un solo comando usando Traefik como API Gateway y balanceador de carga.
 
-## 🏗️ Arquitectura
-
-```
-Cliente → Traefik (puerto 80) → /extract             → ms-pdf-extract (5 réplicas)
-                               → /extract-and-summarize → ms-pdf-extract (5 réplicas)
-                               → /summarize           → ms-ia-summary
-                                                              ↓
-                                                            Ollama
-```
-
-## 📁 Estructura de carpetas
+## Arquitectura del Sistema
 
 ```
-pdf-extratext-infra/
-├── docker-compose.yml      ← Orquesta todo el ecosistema
-├── traefik/
-│   ├── traefik.yml         ← Configuración estática de Traefik
-│   └── dynamic.yml         ← Configuración dinámica (middlewares)
-├── .env / .env.example
-├── .gitignore
-└── README.md
+        CLIENTE (curl / Frontend)
+               │
+               ▼
+     ┌─────────────────────┐
+     │  TRAEFIK GATEWAY    │  Puerto 80 (proxy) │ Puerto 8080 (dashboard)
+     │  Reverse Proxy +    │
+     │  Load Balancer      │
+     └────────┬────────────┘
+              │                     
+    ┌─────────┴──────────┐          
+    │ /extract           │ /summarize
+    ▼                    ▼           
+┌──────────────┐   ┌─────────────────┐
+│ms-pdf-extract│   │  ms-ia-summary  │
+│  × 5 réplicas│──▶│  × 1 instancia  │
+│  1CPU / 512M │   │                 │
+└──────────────┘   └────────┬────────┘
+                            │
+                            ▼
+                    ┌──────────────┐
+                    │    OLLAMA    │
+                    │  LLaMA 3.2  │
+                    └──────────────┘
 ```
 
-## 📋 Requisitos previos
+## Repositorios del Proyecto
 
-- **Docker** y **Docker Compose** instalados
-- Los repos `ms-pdf-extract` y `ms-ia-summary` clonados al **mismo nivel** que este repo:
+| Repositorio | Descripción |
+|---|---|
+| [ms-pdf-extract](https://github.com/tomasreali/ms-pdf-extract) | Microservicio de extracción de texto de PDF |
+| [ms-ia-summary](https://github.com/tomasreali/ms-ia-summary) | Microservicio de resumen con IA (Ollama) |
+| [pdf-extratext-infra](https://github.com/tomasreali/pdf-extratext-infra) | Este repo: infraestructura y orquestación |
+| [pdf-extratext](https://github.com/tomasreali/pdf-extratext) | Monolito original (versión de referencia) |
+
+## Requisitos Previos
+
+- Docker Desktop instalado y corriendo
+- Git
+- Los repos `ms-pdf-extract` y `ms-ia-summary` clonados en carpetas hermanas a esta:
 
 ```
-Desarrollo de Software/
-├── ms-pdf-extract/         ← Microservicio de extracción
-├── ms-ia-summary/          ← Microservicio de resumen con IA
-└── pdf-extratext-infra/    ← Este repo (infraestructura)
+Proyectos/
+├── pdf-extratext-infra/   ← este repo
+├── ms-pdf-extract/
+└── ms-ia-summary/
 ```
 
-## 🚀 Levantar todo el ecosistema
+## Cómo levantar todo el sistema
 
+### 1. Clonar los repos en la estructura correcta
 ```bash
-# 1. Copiar variables de entorno
+git clone https://github.com/tomasreali/pdf-extratext-infra.git
+git clone https://github.com/tomasreali/ms-pdf-extract.git
+git clone https://github.com/tomasreali/ms-ia-summary.git
+```
+
+### 2. Configurar variables de entorno
+```bash
+cd pdf-extratext-infra
 cp .env.example .env
+```
 
-# 2. Levantar todo (un solo comando)
+### 3. Levantar todo el ecosistema
+```bash
 docker compose up --build
+```
 
-# 3. En otra terminal, descargar el modelo de Ollama (solo la primera vez)
+### 4. Descargar el modelo de IA (solo la primera vez)
+```bash
 docker exec ollama ollama pull llama3.2
 ```
 
-## ✅ Verificar que funciona
-
+### 5. Verificar que todo funciona
 ```bash
-# Health check de extracción (pasa por Traefik, distribuido entre 5 réplicas)
-curl http://localhost/health
+# Health check del gateway
+curl http://localhost/extract/health
+curl http://localhost/summarize/health
 
-# Dashboard de Traefik (ver réplicas y balanceo)
+# Traefik Dashboard
 # Abrir en el navegador: http://localhost:8080
-
-# Probar extracción
-curl -X POST http://localhost/extract -F "file=@test.pdf"
-
-# Probar extracción + resumen (comunicación inter-servicios)
-curl -X POST http://localhost/extract-and-summarize -F "file=@test.pdf"
-
-# Probar resumen directo
-curl -X POST http://localhost/summarize \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Texto largo de ejemplo para que la IA lo resuma correctamente."}'
 ```
 
-## 🔌 Puertos
+## Endpoints disponibles
 
-| Servicio | Puerto | Descripción |
-|----------|--------|-------------|
-| Traefik (HTTP) | 80 | Punto de entrada principal |
-| Traefik Dashboard | 8080 | Panel de administración |
-| Ollama | 11434 | Motor de IA |
+| Método | URL | Descripción |
+|---|---|---|
+| GET | `http://localhost/extract/health` | Health check de ms-pdf-extract |
+| POST | `http://localhost/extract` | Extrae texto de un PDF |
+| POST | `http://localhost/extract-and-summarize` | Extrae texto + genera resumen con IA |
+| GET | `http://localhost/summarize/health` | Health check de ms-ia-summary |
+| POST | `http://localhost/summarize` | Genera resumen de texto con IA |
 
-## ⚙️ Configuración de réplicas y recursos
+## Patrones de Resiliencia Implementados
 
-El microservicio `ms-pdf-extract` está configurado con:
-- **5 réplicas** para balanceo de carga
-- **Límites por réplica:** 1.0 CPU, 512MB RAM
-- **Health checks** cada 10 segundos para detectar réplicas caídas
+### Circuit Breaker (en ms-pdf-extract)
+Cuando `ms-ia-summary` no responde, el Circuit Breaker protege al sistema:
+- **CLOSED**: funcionamiento normal, peticiones pasan
+- **OPEN**: tras 5 fallas consecutivas, rechaza peticiones inmediatamente (evita cascada de errores)
+- **HALF_OPEN**: después de 30 segundos, permite 1 petición de prueba para verificar recuperación
 
-## 📦 Variables de entorno
+### Retry con Backoff Exponencial (en ms-pdf-extract)
+Antes de registrar una falla en el Circuit Breaker, reintenta 3 veces:
+- Intento 1: inmediato
+- Intento 2: espera 1 segundo
+- Intento 3: espera 2 segundos
 
-| Variable | Default | Descripción |
-|----------|---------|-------------|
-| `MAX_FILE_SIZE_MB` | 10 | Tamaño máximo de PDF permitido |
-| `OLLAMA_URL` | `http://ollama:11434` | URL del servidor Ollama |
-| `OLLAMA_MODEL` | `llama3.2` | Modelo de IA a utilizar |
+### Rate Limit (en ms-ia-summary)
+Máximo 3 resúmenes simultáneos. Si se supera el límite, responde 429 (Too Many Requests) inmediatamente en lugar de saturar a Ollama.
+
+### Cache (en ms-ia-summary)
+Los resúmenes ya generados se guardan en memoria. Si el mismo texto se solicita de nuevo, se devuelve el resultado cacheado sin llamar a Ollama.
+
+### Degradación Elegante
+Si `ms-ia-summary` cae o el Circuit Breaker está abierto, `ms-pdf-extract` sigue funcionando y devuelve la extracción de texto con `summary: null` y un mensaje explicativo en `summary_error`.
+
+### SAGA con Orquestador (patrón aplicado en /extract-and-summarize)
+El endpoint `/extract-and-summarize` implementa una SAGA donde `ms-pdf-extract` actúa como orquestador:
+1. **Paso 1**: extrae el texto del PDF (siempre se ejecuta)
+2. **Paso 2**: solicita el resumen a `ms-ia-summary`
+3. **Compensación**: si el Paso 2 falla, no se hace rollback del Paso 1 (la extracción es stateless), sino que se devuelve el resultado parcial con el texto extraído y `summary_error` explicando la causa
+
+Este diseño garantiza que el fallo de un servicio no invalida el trabajo ya realizado.
+
+## Réplicas y Límites de Recursos
+
+`ms-pdf-extract` corre con **5 réplicas**, cada una limitada a:
+- 1.0 CPU
+- 512 MB RAM
+
+Traefik distribuye las peticiones entre las réplicas en modo **Round Robin** y excluye automáticamente del balanceo las réplicas que fallan el health check.
